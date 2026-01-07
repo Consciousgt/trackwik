@@ -395,29 +395,28 @@
             const [qty, setQty] = useState(1);
             const [customItem, setCustomItem] = useState({ name: '', price: 0, cost: 0 }); // For non-inventory items
 
+            const activeProduct = useMemo(() =>
+                products.find(p => p.id == selectedProduct),
+                [selectedProduct, products]);
+
             const handleProductChange = (e) => {
-                const pid = e.target.value;
-                setSelectedProduct(pid);
-                if (pid) {
-                    const p = products.find(x => x.id == pid);
-                    // Reset custom fields if product selected, or could pre-fill
-                }
+                setSelectedProduct(e.target.value);
             };
 
             const handleSubmit = (e) => {
                 e.preventDefault();
                 let saleData = {};
 
-                if (selectedProduct) {
-                    const p = products.find(x => x.id == selectedProduct);
-                    if (!p) return;
-                    if (p.stock < qty) if (!confirm(`Warning: Stock is low (${p.stock}). Continue?`)) return;
+                if (activeProduct) {
+                    if (activeProduct.stock < qty) {
+                        if (!confirm(`Insufficient Stock! Available: ${activeProduct.stock}. Sell anyway?`)) return;
+                    }
 
                     saleData = {
-                        productId: p.id,
-                        item: p.name,
-                        price: p.price,
-                        cost: p.cost,
+                        productId: activeProduct.id,
+                        item: activeProduct.name,
+                        price: activeProduct.price,
+                        cost: activeProduct.cost,
                         qty: parseFloat(qty)
                     };
                 } else {
@@ -444,24 +443,37 @@
                     <div className="lg:col-span-2 space-y-6">
                         <div className="bg-white p-6 rounded-xl shadow-sm">
                             <h3 className="font-bold mb-4 text-lg">New Transaction</h3>
-                            <form onSubmit={handleSubmit} className="space-y-4">
+                            <form onSubmit={handleSubmit} className="space-y-6">
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Select Product (Inventory)</label>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Select Product</label>
                                     <select
                                         value={selectedProduct}
                                         onChange={handleProductChange}
-                                        className="w-full p-3 border rounded-lg bg-gray-50 focus:ring-2 focus:ring-green-500"
+                                        className="w-full p-3 border rounded-lg bg-gray-50 focus:ring-2 focus:ring-green-500 text-lg"
                                     >
                                         <option value="">-- Manual Entry / Custom Item --</option>
                                         {products.map(p => (
                                             <option key={p.id} value={p.id}>
-                                                {p.name} (Stock: {p.stock}) - ₦{p.price}
+                                                {p.name}
                                             </option>
                                         ))}
                                     </select>
                                 </div>
 
-                                {!selectedProduct && (
+                                {activeProduct ? (
+                                    <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 grid grid-cols-2 gap-4">
+                                        <div>
+                                            <p className="text-xs text-blue-600 font-bold uppercase">Price per Unit</p>
+                                            <p className="text-xl font-bold text-gray-800">₦{activeProduct.price.toLocaleString()}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-blue-600 font-bold uppercase">Available Stock</p>
+                                            <p className={`text-xl font-bold ${activeProduct.stock < 5 ? 'text-red-600' : 'text-gray-800'}`}>
+                                                {activeProduct.stock} units
+                                            </p>
+                                        </div>
+                                    </div>
+                                ) : (
                                     <div className="grid grid-cols-2 gap-4 p-4 bg-yellow-50 rounded-lg border border-yellow-100">
                                         <div className="col-span-2">
                                             <label className="text-xs font-bold text-yellow-800">Custom Item Name</label>
@@ -480,16 +492,30 @@
 
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
-                                    <input type="number" value={qty} onChange={e => setQty(e.target.value)} className="w-full p-3 border rounded-lg" min="1" />
+                                    <div className="flex items-center gap-4">
+                                        <input
+                                            type="number"
+                                            value={qty}
+                                            onChange={e => setQty(e.target.value)}
+                                            className="flex-1 p-3 border rounded-lg text-lg font-bold"
+                                            min="1"
+                                        />
+                                        {activeProduct && (
+                                            <div className="text-sm text-gray-500">
+                                                Remaining after sale: <span className={(activeProduct.stock - qty) < 0 ? 'text-red-600 font-bold' : 'font-bold'}>{activeProduct.stock - qty}</span>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
 
-                                <button type="submit" className="w-full py-4 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 text-lg shadow-lg">
-                                    Record Sale ₦{
-                                        (selectedProduct
-                                            ? (products.find(x => x.id == selectedProduct)?.price || 0) * qty
-                                            : customItem.price * qty
+                                <button type="submit" className="w-full py-4 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 text-lg shadow-lg flex justify-between px-6">
+                                    <span>Record Sale</span>
+                                    <span>₦{
+                                        (activeProduct
+                                            ? (activeProduct.price * qty)
+                                            : (customItem.price * qty)
                                         ).toLocaleString()
-                                    }
+                                    }</span>
                                 </button>
                             </form>
                         </div>
