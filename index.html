@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nigeria Tax & Inventory Manager - Compliance Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .nav-item.active {
+            background-color: #064e3b;
+            color: white;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-100 h-screen overflow-hidden">
+    <div id="root" class="h-full"></div>
+
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- DATABASE SERVICE ---
+        const DB_KEY = 'ng_tax_system_v4';
+        const DataService = {
+            load: () => {
+                try {
+                    return JSON.parse(localStorage.getItem(DB_KEY)) || null;
+                } catch (e) { return null; }
+            },
+            save: (data) => {
+                try {
+                    localStorage.setItem(DB_KEY, JSON.stringify(data));
+                } catch (e) { alert("Storage Full! Export and clear data."); }
+            }
+        };
+
+        // --- COMPONENTS ---
+
+        // 1. PIN LOGIN
+        const AuthScreen = ({ onLogin, onSetup, hasAccount }) => {
+            const [pin, setPin] = useState('');
+            const [error, setError] = useState('');
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (hasAccount) {
+                    onLogin(pin);
+                } else {
+                    if (pin.length < 4) return setError("PIN must be 4 digits");
+                    onSetup(pin);
+                }
+            };
+
+            return (
+                <div className="flex items-center justify-center h-full bg-green-900">
+                    <div className="bg-white p-8 rounded-xl shadow-2xl w-96 max-w-full m-4">
+                        <div className="text-center mb-6">
+                            <h1 className="text-2xl font-bold text-green-800">
+                                {hasAccount ? 'Welcome Back' : 'Business Setup'}
+                            </h1>
+                            <p className="text-gray-500 text-sm">
+                                {hasAccount ? 'Enter your PIN to access records' : 'Create a secure PIN for your offline data'}
+                            </p>
+                        </div>
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <input
+                                type="password"
+                                maxLength="4"
+                                value={pin}
+                                onChange={e => { setPin(e.target.value.replace(/\D/g, '')); setError(''); }}
+                                className="w-full text-center text-4xl tracking-widest p-4 border rounded-lg focus:ring-2 focus:ring-green-500 outline-none font-mono"
+                                placeholder="••••"
+                                autoFocus
+                            />
+                            {error && <p className="text-red-500 text-center text-sm">{error}</p>}
+                            <button className="w-full py-3 bg-green-700 text-white rounded-lg font-bold hover:bg-green-800 transition">
+                                {hasAccount ? 'UNLOCK' : 'CREATE ACCOUNT'}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+        // 2. MAIN APP
+        const App = () => {
+            const [session, setSession] = useState('auth'); // auth, app
+            const [view, setView] = useState('dashboard'); // dashboard, inventory, sales, expenses, reports, settings
+            const [data, setData] = useState({
+                business: { name: '', tin: '', category: 'Retail', pin: null },
+                products: [],
+                sales: [],
+                expenses: []
+            });
+
+            // Initial Load
+            useEffect(() => {
+                const saved = DataService.load();
+                if (saved) {
+                    setData(saved);
+                    if (!saved.business.pin) setSession('app'); // Legacy migration or no PIN
+                } else {
+                    // Clean slate
+                }
+            }, []);
+
+            // Auto Save
+            useEffect(() => {
+                if (session === 'app') DataService.save(data);
+            }, [data, session]);
+
+            // Auth Handlers
+            const handleLogin = (pin) => {
+                if (pin === data.business.pin) setSession('app');
+                else alert("Incorrect PIN");
+            };
+            const handleSetup = (pin) => {
+                setData(prev => ({ ...prev, business: { ...prev.business, pin } }));
+                setSession('app');
+            };
+
+            // CRUD Helpers
+            const addItem = (collection, item) => {
+                setData(prev => ({ ...prev, [collection]: [...prev[collection], { id: Date.now(), ...item }] }));
+            };
+            const updateItem = (collection, id, updates) => {
+                setData(prev => ({ ...prev, [collection]: prev[collection].map(x => x.id === id ? { ...x, ...updates } : x) }));
+            };
+            const deleteItem = (collection, id) => {
+                if (confirm("Are you sure?"))
+                    setData(prev => ({ ...prev, [collection]: prev[collection].filter(x => x.id !== id) }));
+            };
+
+            // Specific Actions
+            const recordSale = (saleData) => {
+                // 1. Add Sale
+                const saleId = Date.now();
+                const newSale = { id: saleId, date: new Date().toISOString().split('T')[0], ...saleData };
+
+                // 2. Deduct Stock (if product exists)
+                let updatedProducts = data.products;
+                if (saleData.productId) {
+                    updatedProducts = data.products.map(p =>
+                        p.id === parseInt(saleData.productId)
+                            ? { ...p, stock: p.stock - saleData.qty }
+                            : p
+                    );
+                }
+
+                setData(prev => ({ ...prev, sales: [...prev.sales, newSale], products: updatedProducts }));
+            };
+
+            // --- CALCULATIONS ---
+            const stats = useMemo(() => {
+                const totalRevenue = data.sales.reduce((sum, s) => sum + (s.price * s.qty), 0);
+                const totalCOGS = data.sales.reduce((sum, s) => sum + (s.cost * s.qty), 0);
+                const totalExpenses = data.expenses.reduce((sum, e) => sum + e.amount, 0);
+                const grossProfit = totalRevenue - totalCOGS;
+                const netProfit = grossProfit - totalExpenses;
+                const lowStockCount = data.products.filter(p => p.stock <= (p.minStock || 5)).length;
+
+                return { totalRevenue, totalCOGS, totalExpenses, grossProfit, netProfit, lowStockCount };
+            }, [data]);
+
+            if (session === 'auth') return <AuthScreen onLogin={handleLogin} onSetup={handleSetup} hasAccount={!!data.business.pin} />;
+
+            return (
+                <div className="flex h-screen bg-gray-100 text-gray-800">
+                    {/* SIDEBAR */}
+                    <div className="w-64 bg-green-900 text-green-100 flex flex-col flex-shrink-0">
+                        <div className="p-6">
+                            <h2 className="text-xl font-bold tracking-tight">Tax Manager</h2>
+                            <p className="text-xs text-green-400 mt-1">{data.business.name || 'Set Business Name'}</p>
+                        </div>
+                        <nav className="flex-1 space-y-1 px-2">
+                            {[
+                                { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+                                { id: 'sales', label: 'Sales Terminal', icon: '💰' },
+                                { id: 'inventory', label: 'Inventory (Stock)', icon: '📦' },
+                                { id: 'expenses', label: 'Expenses', icon: '💸' },
+                                { id: 'reports', label: 'Tax Reports', icon: '📑' },
+                                { id: 'settings', label: 'Settings', icon: '⚙️' },
+                            ].map(item => (
+                                <button
+                                    key={item.id}
+                                    onClick={() => setView(item.id)}
+                                    className={`nav-item w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition ${view === item.id ? 'active' : 'hover:bg-green-800'}`}
+                                >
+                                    <span>{item.icon}</span> {item.label}
+                                </button>
+                            ))}
+                        </nav>
+                        <div className="p-4 border-t border-green-800">
+                            <button onClick={() => setSession('auth')} className="text-sm text-green-400 hover:text-white flex items-center gap-2">
+                                🔒 Lock App
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* MAIN CONTENT Area */}
+                    <div className="flex-1 overflow-auto">
+                        <header className="bg-white shadow-sm px-8 py-4 sticky top-0 z-10">
+                            <h1 className="text-2xl font-bold text-gray-800 capitalize">{view}</h1>
+                        </header>
+                        <main className="p-8">
+
+                            {/* DASHBOARD */}
+                            {view === 'dashboard' && (
+                                <div className="space-y-6">
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                                        <StatCard label="Net Profit" amount={stats.netProfit} color="green" />
+                                        <StatCard label="Revenue" amount={stats.totalRevenue} color="blue" />
+                                        <StatCard label="Expenses" amount={stats.totalExpenses} color="red" />
+                                        <StatCard label="Low Stock Items" value={stats.lowStockCount} color="yellow" isCurrency={false} />
+                                    </div>
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                        <div className="bg-white p-6 rounded-xl shadow-sm">
+                                            <h3 className="font-bold mb-4">Recent Sales</h3>
+                                            <div className="overflow-auto max-h-64">
+                                                <table className="w-full text-sm text-left">
+                                                    <thead className="bg-gray-50 text-gray-500">
+                                                        <tr><th className="p-2">Item</th><th className="p-2">Qty</th><th className="p-2 text-right">Total</th></tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {data.sales.slice(-5).reverse().map(s => (
+                                                            <tr key={s.id} className="border-b">
+                                                                <td className="p-2">{s.item}</td>
+                                                                <td className="p-2">{s.qty}</td>
+                                                                <td className="p-2 text-right">₦{Number(s.qty * s.price).toLocaleString()}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                        <div className="bg-white p-6 rounded-xl shadow-sm">
+                                            <h3 className="font-bold mb-4">Quick Actions</h3>
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <button onClick={() => setView('sales')} className="p-4 bg-green-50 text-green-700 rounded-lg hover:bg-green-100 font-semibold border border-green-200">
+                                                    + New Sale
+                                                </button>
+                                                <button onClick={() => setView('expenses')} className="p-4 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 font-semibold border border-red-200">
+                                                    + New Expense
+                                                </button>
+                                                <button onClick={() => setView('inventory')} className="p-4 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 font-semibold border border-blue-200">
+                                                    Add Stock
+                                                </button>
+                                                <button onClick={() => setView('reports')} className="p-4 bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100 font-semibold border border-purple-200">
+                                                    Tax Report
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* INVENTORY */}
+                            {view === 'inventory' && (
+                                <InventoryView
+                                    products={data.products}
+                                    onAdd={(p) => addItem('products', p)}
+                                    onUpdate={(id, u) => updateItem('products', id, u)}
+                                    onDelete={(id) => deleteItem('products', id)}
+                                />
+                            )}
+
+                            {/* SALES */}
+                            {view === 'sales' && (
+                                <SalesTerminal
+                                    products={data.products}
+                                    onRecordSale={recordSale}
+                                    salesHistory={data.sales}
+                                />
+                            )}
+
+                            {/* EXPENSES */}
+                            {view === 'expenses' && (
+                                <ExpensesView
+                                    expenses={data.expenses}
+                                    onAdd={(e) => addItem('expenses', e)}
+                                    onDelete={(id) => deleteItem('expenses', id)}
+                                />
+                            )}
+
+                            {/* REPORTS */}
+                            {view === 'reports' && (
+                                <ReportsView data={data} stats={stats} />
+                            )}
+
+                            {/* SETTINGS */}
+                            {view === 'settings' && (
+                                <SettingsView
+                                    business={data.business}
+                                    onUpdate={(b) => setData(prev => ({ ...prev, business: { ...prev.business, ...b } }))}
+                                />
+                            )}
+                        </main>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- SUB-VIEWS ---
+
+        const StatCard = ({ label, amount, value, color, isCurrency = true }) => (
+            <div className={`bg-white p-6 rounded-xl shadow-sm border-b-4 border-${color}-500`}>
+                <p className="text-gray-500 text-sm font-medium uppercase">{label}</p>
+                <p className={`text-2xl font-bold text-${color}-600 mt-2`}>
+                    {isCurrency ? `₦${(amount || 0).toLocaleString()}` : value}
+                </p>
+            </div>
+        );
+
+        const InventoryView = ({ products, onAdd, onUpdate, onDelete }) => {
+            const [newItem, setNewItem] = useState({ name: '', category: 'General', stock: 0, cost: 0, price: 0 });
+
+            return (
+                <div className="space-y-6">
+                    {/* Add Item Form */}
+                    <div className="bg-white p-6 rounded-xl shadow-sm">
+                        <h3 className="font-bold mb-4">Add New Product</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
+                            <div className="md:col-span-2">
+                                <label className="text-xs text-gray-500">Item Name</label>
+                                <input value={newItem.name} onChange={e => setNewItem({ ...newItem, name: e.target.value })} className="w-full border p-2 rounded" placeholder="E.g. Rice 50kg" />
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-500">Cost Price</label>
+                                <input type="number" value={newItem.cost} onChange={e => setNewItem({ ...newItem, cost: parseFloat(e.target.value) })} className="w-full border p-2 rounded" />
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-500">Sell Price</label>
+                                <input type="number" value={newItem.price} onChange={e => setNewItem({ ...newItem, price: parseFloat(e.target.value) })} className="w-full border p-2 rounded" />
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-500">Stock Qty</label>
+                                <input type="number" value={newItem.stock} onChange={e => setNewItem({ ...newItem, stock: parseFloat(e.target.value) })} className="w-full border p-2 rounded" />
+                            </div>
+                            <button onClick={() => { onAdd(newItem); setNewItem({ name: '', category: 'General', stock: 0, cost: 0, price: 0 }); }} className="bg-blue-600 text-white p-2 rounded font-bold hover:bg-blue-700">Add Item</button>
+                        </div>
+                    </div>
+
+                    {/* Inventory Table */}
+                    <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-gray-50 uppercase text-xs font-bold text-gray-500">
+                                <tr>
+                                    <th className="p-4">Item Name</th>
+                                    <th className="p-4 text-right">Stock</th>
+                                    <th className="p-4 text-right">Cost</th>
+                                    <th className="p-4 text-right">Price</th>
+                                    <th className="p-4 text-center">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y">
+                                {products.map(p => (
+                                    <tr key={p.id} className="hover:bg-gray-50">
+                                        <td className="p-4 font-medium">{p.name}</td>
+                                        <td className="p-4 text-right">
+                                            <input
+                                                type="number"
+                                                value={p.stock}
+                                                onChange={e => onUpdate(p.id, { stock: parseFloat(e.target.value) })}
+                                                className={`w-20 border rounded p-1 text-right ${p.stock < 5 ? 'text-red-600 font-bold bg-red-50' : ''}`}
+                                            />
+                                        </td>
+                                        <td className="p-4 text-right">₦{p.cost.toLocaleString()}</td>
+                                        <td className="p-4 text-right">₦{p.price.toLocaleString()}</td>
+                                        <td className="p-4 text-center">
+                                            <button onClick={() => onDelete(p.id)} className="text-red-500 hover:text-red-700">Delete</button>
+                                        </td>
+                                    </tr>
+                                ))}
+                                {products.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-gray-400">No items in inventory. Add some above.</td></tr>}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+
+        const SalesTerminal = ({ products, onRecordSale, salesHistory }) => {
+            const [selectedProduct, setSelectedProduct] = useState('');
+            const [qty, setQty] = useState(1);
+            const [customItem, setCustomItem] = useState({ name: '', price: 0, cost: 0 }); // For non-inventory items
+
+            const handleProductChange = (e) => {
+                const pid = e.target.value;
+                setSelectedProduct(pid);
+                if (pid) {
+                    const p = products.find(x => x.id == pid);
+                    // Reset custom fields if product selected, or could pre-fill
+                }
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                let saleData = {};
+
+                if (selectedProduct) {
+                    const p = products.find(x => x.id == selectedProduct);
+                    if (!p) return;
+                    if (p.stock < qty) if (!confirm(`Warning: Stock is low (${p.stock}). Continue?`)) return;
+
+                    saleData = {
+                        productId: p.id,
+                        item: p.name,
+                        price: p.price,
+                        cost: p.cost,
+                        qty: parseFloat(qty)
+                    };
+                } else {
+                    // Custom Sale
+                    if (!customItem.name || !customItem.price) return alert("Enter item details");
+                    saleData = {
+                        productId: null,
+                        item: customItem.name,
+                        price: parseFloat(customItem.price),
+                        cost: parseFloat(customItem.cost || 0),
+                        qty: parseFloat(qty)
+                    };
+                }
+
+                onRecordSale(saleData);
+                setQty(1);
+                setCustomItem({ name: '', price: 0, cost: 0 });
+                setSelectedProduct('');
+            };
+
+            return (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    {/* Terminal */}
+                    <div className="lg:col-span-2 space-y-6">
+                        <div className="bg-white p-6 rounded-xl shadow-sm">
+                            <h3 className="font-bold mb-4 text-lg">New Transaction</h3>
+                            <form onSubmit={handleSubmit} className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Select Product (Inventory)</label>
+                                    <select
+                                        value={selectedProduct}
+                                        onChange={handleProductChange}
+                                        className="w-full p-3 border rounded-lg bg-gray-50 focus:ring-2 focus:ring-green-500"
+                                    >
+                                        <option value="">-- Manual Entry / Custom Item --</option>
+                                        {products.map(p => (
+                                            <option key={p.id} value={p.id}>
+                                                {p.name} (Stock: {p.stock}) - ₦{p.price}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {!selectedProduct && (
+                                    <div className="grid grid-cols-2 gap-4 p-4 bg-yellow-50 rounded-lg border border-yellow-100">
+                                        <div className="col-span-2">
+                                            <label className="text-xs font-bold text-yellow-800">Custom Item Name</label>
+                                            <input value={customItem.name} onChange={e => setCustomItem({ ...customItem, name: e.target.value })} className="w-full p-2 border rounded" placeholder="e.g. Service Charge" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-bold text-yellow-800">Selling Price</label>
+                                            <input type="number" value={customItem.price} onChange={e => setCustomItem({ ...customItem, price: e.target.value })} className="w-full p-2 border rounded" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-bold text-yellow-800">Cost (optional)</label>
+                                            <input type="number" value={customItem.cost} onChange={e => setCustomItem({ ...customItem, cost: e.target.value })} className="w-full p-2 border rounded" />
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
+                                    <input type="number" value={qty} onChange={e => setQty(e.target.value)} className="w-full p-3 border rounded-lg" min="1" />
+                                </div>
+
+                                <button type="submit" className="w-full py-4 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 text-lg shadow-lg">
+                                    Record Sale ₦{
+                                        (selectedProduct
+                                            ? (products.find(x => x.id == selectedProduct)?.price || 0) * qty
+                                            : customItem.price * qty
+                                        ).toLocaleString()
+                                    }
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+
+                    {/* History */}
+                    <div className="bg-white rounded-xl shadow-sm overflow-hidden h-full">
+                        <div className="p-4 bg-gray-50 border-b font-bold text-gray-700">Today's Transactions</div>
+                        <div className="overflow-auto max-h-[600px] p-4 space-y-3">
+                            {salesHistory.slice().reverse().map(s => (
+                                <div key={s.id} className="flex justify-between items-center text-sm border-b pb-2">
+                                    <div>
+                                        <div className="font-medium">{s.item}</div>
+                                        <div className="text-xs text-gray-500">{s.qty} x ₦{s.price}</div>
+                                    </div>
+                                    <div className="font-bold">₦{(s.qty * s.price).toLocaleString()}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ExpensesView = ({ expenses, onAdd, onDelete }) => {
+            const [form, setForm] = useState({ description: '', category: 'General', amount: 0, date: new Date().toISOString().split('T')[0] });
+            return (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="bg-white p-6 rounded-xl shadow-sm h-fit">
+                        <h3 className="font-bold mb-4">Record Expense</h3>
+                        <div className="space-y-4">
+                            <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} className="w-full border p-2 rounded" />
+                            <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} className="w-full border p-2 rounded">
+                                <option>Rent</option><option>Utilities</option><option>Transport</option><option>Wages</option><option>General</option>
+                            </select>
+                            <input placeholder="Description" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="w-full border p-2 rounded" />
+                            <input type="number" placeholder="Amount" value={form.amount} onChange={e => setForm({ ...form, amount: parseFloat(e.target.value) })} className="w-full border p-2 rounded" />
+                            <button onClick={() => { onAdd(form); setForm({ ...form, description: '', amount: 0 }); }} className="w-full bg-red-600 text-white p-3 rounded font-bold">Record Expense</button>
+                        </div>
+                    </div>
+                    <div className="md:col-span-2 bg-white rounded-xl shadow-sm p-6 overflow-hidden">
+                        <h3 className="font-bold mb-4">Expense Log</h3>
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-gray-50 text-gray-500">
+                                <tr><th>Date</th><th>Category</th><th>Note</th><th className="text-right">Amount</th><th></th></tr>
+                            </thead>
+                            <tbody className="divide-y">
+                                {expenses.map(e => (
+                                    <tr key={e.id}>
+                                        <td className="p-3">{e.date}</td>
+                                        <td className="p-3"><span className="bg-gray-100 px-2 py-1 rounded text-xs">{e.category}</span></td>
+                                        <td className="p-3">{e.description}</td>
+                                        <td className="p-3 text-right font-bold">₦{e.amount.toLocaleString()}</td>
+                                        <td className="p-3 text-right"><button onClick={() => onDelete(e.id)} className="text-red-400">×</button></td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+
+        const ReportsView = ({ data, stats }) => {
+            const generatePDF = () => {
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF();
+
+                doc.setFontSize(20);
+                doc.text(data.business.name || "My Business", 20, 20);
+                doc.setFontSize(12);
+                doc.text("Tax Compliance Report", 20, 30);
+
+                const tableData = [
+                    ["Metric", "Value"],
+                    ["Total Revenue", `N ${stats.totalRevenue.toLocaleString()}`],
+                    ["Total COGS", `N ${stats.totalCOGS.toLocaleString()}`],
+                    ["Gross Profit", `N ${stats.grossProfit.toLocaleString()}`],
+                    ["Operating Expenses", `N ${stats.totalExpenses.toLocaleString()}`],
+                    ["Net Profit", `N ${stats.netProfit.toLocaleString()}`],
+                    ["Est. CIT (30%)", `N ${Math.max(0, stats.netProfit * 0.3).toLocaleString()}`]
+                ];
+
+                doc.autoTable({
+                    startY: 40,
+                    head: [['Report Summary', '']],
+                    body: tableData,
+                });
+
+                doc.save(`Tax_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="bg-white p-8 rounded-xl shadow-sm text-center">
+                        <h2 className="text-2xl font-bold text-gray-800 mb-4">Financial & Tax Reports</h2>
+                        <p className="text-gray-500 mb-8 max-w-lg mx-auto">Generate official PDF reports for tax compliance. This includes your Revenue, Expense, and Profit breakdown compliant with Nigerian Tax Standards.</p>
+                        <button onClick={generatePDF} className="bg-green-700 text-white px-8 py-4 rounded-xl font-bold text-lg hover:bg-green-800 shadow-lg flex items-center gap-3 mx-auto">
+                            <span>📄</span> Download Official PDF Report
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="bg-white p-6 rounded-xl shadow-sm">
+                            <h3 className="font-bold mb-4 border-b pb-2">Profit & Loss Statement</h3>
+                            <div className="space-y-3">
+                                <div className="flex justify-between"><span>Revenue</span> <span className="font-bold">₦{stats.totalRevenue.toLocaleString()}</span></div>
+                                <div className="flex justify-between text-red-500"><span>Cost of Goods</span> <span>- ₦{stats.totalCOGS.toLocaleString()}</span></div>
+                                <div className="flex justify-between border-t pt-2 font-bold text-lg"><span>Gross Profit</span> <span>₦{stats.grossProfit.toLocaleString()}</span></div>
+                                <div className="flex justify-between text-red-500"><span>Expenses</span> <span>- ₦{stats.totalExpenses.toLocaleString()}</span></div>
+                                <div className="flex justify-between border-t pt-2 font-bold text-xl bg-gray-50 p-2 rounded"><span>Net Profit</span> <span className={stats.netProfit >= 0 ? "text-green-600" : "text-red-600"}>₦{stats.netProfit.toLocaleString()}</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const SettingsView = ({ business, onUpdate }) => (
+            <div className="bg-white p-6 rounded-xl shadow-sm max-w-2xl">
+                <h3 className="font-bold mb-6 text-xl">Business Settings</h3>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium mb-1">Business Name</label>
+                        <input value={business.name} onChange={e => onUpdate({ name: e.target.value })} className="w-full border p-2 rounded" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-1">Tax Identification Number (TIN)</label>
+                        <input value={business.tin} onChange={e => onUpdate({ tin: e.target.value })} className="w-full border p-2 rounded" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-1">Business Category</label>
+                        <select value={business.category} onChange={e => onUpdate({ category: e.target.value })} className="w-full border p-2 rounded">
+                            <option>Retail / Wholesale</option>
+                            <option>Service Provider</option>
+                            <option>Manufacturing</option>
+                            <option>Other</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-1">Security PIN</label>
+                        <input value={business.pin || ''} readOnly className="w-full border p-2 rounded bg-gray-100 text-gray-500" />
+                        <p className="text-xs text-gray-500 mt-1">Reset your PIN by clearing browser data (Factory Reset).</p>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>
