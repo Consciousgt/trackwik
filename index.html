@@ -8,6 +8,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -64,7 +65,7 @@
 
             return (
                 <div className="flex items-center justify-center h-full bg-green-900">
-                    <div className="bg-white p-8 rounded-xl shadow-2xl w-96 max-w-full m-4">
+                    <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-sm m-4">
                         <div className="text-center mb-6">
                             <h1 className="text-2xl font-bold text-green-800">
                                 {hasAccount ? 'Welcome Back' : 'Business Setup'}
@@ -97,6 +98,7 @@
         const App = () => {
             const [session, setSession] = useState('auth'); // auth, app
             const [view, setView] = useState('dashboard'); // dashboard, inventory, sales, expenses, reports, settings
+            const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
             const [data, setData] = useState({
                 business: { name: '', tin: '', category: 'Retail', pin: null },
                 products: [],
@@ -176,12 +178,28 @@
             if (session === 'auth') return <AuthScreen onLogin={handleLogin} onSetup={handleSetup} hasAccount={!!data.business.pin} />;
 
             return (
-                <div className="flex h-screen bg-gray-100 text-gray-800">
+                <div className="flex h-screen bg-gray-100 text-gray-800 overflow-hidden relative">
+                    {/* MOBILE OVERLAY */}
+                    {isMobileMenuOpen && (
+                        <div
+                            className="fixed inset-0 bg-black bg-opacity-50 z-20 md:hidden transition-opacity"
+                            onClick={() => setIsMobileMenuOpen(false)}
+                        ></div>
+                    )}
+
                     {/* SIDEBAR */}
-                    <div className="w-64 bg-green-900 text-green-100 flex flex-col flex-shrink-0">
-                        <div className="p-6">
-                            <h2 className="text-xl font-bold tracking-tight">Tax Manager</h2>
-                            <p className="text-xs text-green-400 mt-1">{data.business.name || 'Set Business Name'}</p>
+                    <div className={`
+                        fixed inset-y-0 left-0 z-30 w-64 bg-green-900 text-green-100 flex flex-col flex-shrink-0
+                        transition-transform duration-300 transform 
+                        md:relative md:translate-x-0
+                        ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
+                    `}>
+                        <div className="p-6 flex justify-between items-center">
+                            <div>
+                                <h2 className="text-xl font-bold tracking-tight">Tax Manager</h2>
+                                <p className="text-xs text-green-400 mt-1">{data.business.name || 'Set Business Name'}</p>
+                            </div>
+                            <button onClick={() => setIsMobileMenuOpen(false)} className="md:hidden text-green-300 hover:text-white">✕</button>
                         </div>
                         <nav className="flex-1 space-y-1 px-2">
                             {[
@@ -194,7 +212,7 @@
                             ].map(item => (
                                 <button
                                     key={item.id}
-                                    onClick={() => setView(item.id)}
+                                    onClick={() => { setView(item.id); setIsMobileMenuOpen(false); }}
                                     className={`nav-item w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition ${view === item.id ? 'active' : 'hover:bg-green-800'}`}
                                 >
                                     <span>{item.icon}</span> {item.label}
@@ -209,11 +227,17 @@
                     </div>
 
                     {/* MAIN CONTENT Area */}
-                    <div className="flex-1 overflow-auto">
-                        <header className="bg-white shadow-sm px-8 py-4 sticky top-0 z-10">
+                    <div className="flex-1 overflow-auto w-full relative">
+                        <header className="bg-white shadow-sm px-4 py-4 sticky top-0 z-10 flex items-center gap-4">
+                            <button
+                                onClick={() => setIsMobileMenuOpen(true)}
+                                className="md:hidden p-2 rounded-md text-gray-600 hover:bg-gray-100 focus:outline-none"
+                            >
+                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                            </button>
                             <h1 className="text-2xl font-bold text-gray-800 capitalize">{view}</h1>
                         </header>
-                        <main className="p-8">
+                        <main className="p-4 md:p-8">
 
                             {/* DASHBOARD */}
                             {view === 'dashboard' && (
@@ -352,7 +376,7 @@
                     </div>
 
                     {/* Inventory Table */}
-                    <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+                    <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
                         <table className="w-full text-sm text-left">
                             <thead className="bg-gray-50 uppercase text-xs font-bold text-gray-500">
                                 <tr>
@@ -556,7 +580,7 @@
                             <button onClick={() => { onAdd(form); setForm({ ...form, description: '', amount: 0 }); }} className="w-full bg-red-600 text-white p-3 rounded font-bold">Record Expense</button>
                         </div>
                     </div>
-                    <div className="md:col-span-2 bg-white rounded-xl shadow-sm p-6 overflow-hidden">
+                    <div className="md:col-span-2 bg-white rounded-xl shadow-sm p-6 overflow-x-auto">
                         <h3 className="font-bold mb-4">Expense Log</h3>
                         <table className="w-full text-sm text-left">
                             <thead className="bg-gray-50 text-gray-500">
@@ -608,14 +632,93 @@
                 doc.save(`Tax_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
             };
 
+            const downloadExcel = () => {
+                const wb = XLSX.utils.book_new();
+
+                // 1. Summary Sheet
+                const summaryData = [
+                    ["Metric", "Value"],
+                    ["Total Revenue", stats.totalRevenue],
+                    ["Total COGS", stats.totalCOGS],
+                    ["Gross Profit", stats.grossProfit],
+                    ["Operating Expenses", stats.totalExpenses],
+                    ["Net Profit", stats.netProfit],
+                    ["Est. CIT (30%)", Math.max(0, stats.netProfit * 0.3)]
+                ];
+                const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+                XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
+
+                // 2. Sales Sheet
+                const salesData = data.sales.map(s => ({
+                    Date: s.date,
+                    Item: s.item,
+                    Qty: s.qty,
+                    Price: s.price,
+                    Total: s.price * s.qty,
+                    Cost: s.cost || 0,
+                    Profit: (s.price * s.qty) - ((s.cost || 0) * s.qty)
+                }));
+                const wsSales = XLSX.utils.json_to_sheet(salesData);
+                XLSX.utils.book_append_sheet(wb, wsSales, "Sales");
+
+                // 3. Expenses Sheet
+                const wsExpenses = XLSX.utils.json_to_sheet(data.expenses.map(e => ({
+                    Date: e.date,
+                    Category: e.category,
+                    Description: e.description,
+                    Amount: e.amount
+                })));
+                XLSX.utils.book_append_sheet(wb, wsExpenses, "Expenses");
+
+                XLSX.writeFile(wb, `Tax_Report_${new Date().toISOString().slice(0, 10)}.xlsx`);
+            };
+
+            const downloadCSV = (type) => {
+                let csvContent = "data:text/csv;charset=utf-8,";
+                let filename = "";
+
+                if (type === 'sales') {
+                    filename = "Sales.csv";
+                    csvContent += "Date,Item,Qty,Price,Total\n";
+                    data.sales.forEach(s => {
+                        csvContent += `${s.date},"${s.item}",${s.qty},${s.price},${s.qty * s.price}\n`;
+                    });
+                } else if (type === 'expenses') {
+                    filename = "Expenses.csv";
+                    csvContent += "Date,Category,Description,Amount\n";
+                    data.expenses.forEach(e => {
+                        csvContent += `${e.date},${e.category},"${e.description}",${e.amount}\n`;
+                    });
+                }
+
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", filename);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
             return (
                 <div className="space-y-6">
                     <div className="bg-white p-8 rounded-xl shadow-sm text-center">
                         <h2 className="text-2xl font-bold text-gray-800 mb-4">Financial & Tax Reports</h2>
-                        <p className="text-gray-500 mb-8 max-w-lg mx-auto">Generate official PDF reports for tax compliance. This includes your Revenue, Expense, and Profit breakdown compliant with Nigerian Tax Standards.</p>
-                        <button onClick={generatePDF} className="bg-green-700 text-white px-8 py-4 rounded-xl font-bold text-lg hover:bg-green-800 shadow-lg flex items-center gap-3 mx-auto">
-                            <span>📄</span> Download Official PDF Report
-                        </button>
+                        <p className="text-gray-500 mb-8 max-w-lg mx-auto">Generate official reports for tax compliance and record keeping.</p>
+
+                        <div className="flex flex-col md:flex-row justify-center gap-4">
+                            <button onClick={generatePDF} className="bg-green-700 text-white px-6 py-4 rounded-xl font-bold hover:bg-green-800 shadow-lg flex items-center justify-center gap-2">
+                                <span>📄</span> Download PDF
+                            </button>
+                            <button onClick={downloadExcel} className="bg-emerald-600 text-white px-6 py-4 rounded-xl font-bold hover:bg-emerald-700 shadow-lg flex items-center justify-center gap-2">
+                                <span>📊</span> Download Excel
+                            </button>
+                        </div>
+
+                        <div className="mt-8 flex justify-center gap-4 text-sm text-gray-600">
+                            <button onClick={() => downloadCSV('sales')} className="hover:text-blue-600 underline">Download Sales CSV</button>
+                            <button onClick={() => downloadCSV('expenses')} className="hover:text-red-600 underline">Download Expenses CSV</button>
+                        </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
